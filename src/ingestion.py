@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Iterator
 
@@ -10,6 +11,10 @@ from openai import OpenAI
 from pypdf import PdfReader
 
 from . import config
+
+# Sentence boundary: punctuation + space(s) followed by a capital letter, or
+# punctuation followed by newline(s). Deliberately simple — no nltk/spacy.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])[ \t]+(?=[A-Z])|(?<=[.!?])\n+")
 
 
 def _pdf_pages(path: str) -> Iterator[tuple[int, str]]:
@@ -20,12 +25,60 @@ def _pdf_pages(path: str) -> Iterator[tuple[int, str]]:
             yield i + 1, text
 
 
+def _split_sentences(text: str) -> list[str]:
+    return [s.strip() for s in _SENTENCE_END_RE.split(text) if s.strip()]
+
+
+def _carry_over(sentences: list[str], overlap: int) -> tuple[list[str], int]:
+    """Trailing 1-2 sentences to seed the next chunk, targeting ~overlap chars."""
+    if not sentences or overlap <= 0:
+        return [], 0
+    carry = [sentences[-1]]
+    carry_len = len(carry[0])
+    if len(sentences) >= 2 and carry_len < overlap:
+        carry.insert(0, sentences[-2])
+        carry_len += 1 + len(sentences[-2])
+    return carry, carry_len
+
+
 def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
+    """
+    Greedily pack sentences into chunks up to `size` chars, never splitting a
+    sentence across chunks. A single sentence longer than `size` (equations,
+    tables) falls back to a hard character split. The last 1-2 sentences of
+    each chunk carry over into the next, targeting ~`overlap` chars.
+    """
+    sentences = _split_sentences(text)
+    if not sentences:
+        return []
+
     chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        chunks.append(text[start : start + size])
-        start += size - overlap
+    current: list[str] = []
+    current_len = 0
+
+    for sentence in sentences:
+        if len(sentence) > size:
+            if current:
+                chunks.append(" ".join(current))
+            start = 0
+            while start < len(sentence):
+                chunks.append(sentence[start : start + size])
+                start += size - overlap
+            current, current_len = [], 0
+            continue
+
+        added_len = len(sentence) + (1 if current else 0)
+        if current and current_len + added_len > size:
+            chunks.append(" ".join(current))
+            current, current_len = _carry_over(current, overlap)
+            added_len = len(sentence) + (1 if current else 0)
+
+        current.append(sentence)
+        current_len += added_len
+
+    if current:
+        chunks.append(" ".join(current))
+
     return [c.strip() for c in chunks if c.strip()]
 
 

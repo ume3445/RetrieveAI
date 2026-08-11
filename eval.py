@@ -38,7 +38,7 @@ SMOKE_QA_PAIRS = [
 
 def evaluate_retrieval() -> None:
     from src.ingestion import ingest
-    from src.retrieval import retrieve
+    from src.retrieval import hybrid_retrieve
 
     if not EVAL_PAIRS:
         console.print(
@@ -65,7 +65,7 @@ def evaluate_retrieval() -> None:
 
         with console.status(f"Q{i}: ingesting + retrieving..."):
             collection, _ = ingest(pdf_path)
-            chunks = retrieve(collection, question, top_k=10)
+            chunks = hybrid_retrieve(collection, question, top_k=10)
 
         retrieved_chunk_ids = [str(c.page) for c in chunks]
 
