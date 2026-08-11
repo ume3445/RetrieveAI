@@ -1,33 +1,101 @@
 #!/usr/bin/env python3
 """
-Run retrieval + answer accuracy checks against a PDF.
+IR evaluation harness for RetrieveAI retrieval quality.
 
-Each entry in QA_PAIRS needs a question and a list of keywords; at least one
-keyword must appear in the retrieved chunks AND in the generated answer.
-Empty keywords list passes if any non-empty text is returned.
+Loads (question, pdf_path, relevant_pages) triples from EVAL_PAIRS in
+eval_pairs.py and scores retrieval with recall@5, recall@10, and MRR. Each
+retrieved chunk's page number is used as a chunk_id proxy since chunks don't
+yet carry finer-grained IDs.
 
-Override QA_PAIRS with domain-specific pairs by creating eval_pairs.py:
-    QA_PAIRS = [{"question": "...", "keywords": ["expected", "terms"]}, ...]
+Usage:
+    python eval.py                       Run the IR eval harness over EVAL_PAIRS
+    python eval.py --smoke-test doc.pdf  Old-style keyword pass/fail smoke test
+                                          against a single ad-hoc PDF
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
 from rich.console import Console
 from rich.table import Table
 
+from src.metrics import mean_reciprocal_rank, recall_at_k
+
 console = Console()
 
-QA_PAIRS = [
+try:
+    from eval_pairs import EVAL_PAIRS  # type: ignore
+except ImportError:
+    EVAL_PAIRS = []
+
+SMOKE_QA_PAIRS = [
     {"question": "What is the main topic of the document?", "keywords": []},
     {"question": "Who is the intended audience?", "keywords": []},
     {"question": "What conclusions does the document make?", "keywords": []},
 ]
 
-try:
-    from eval_pairs import QA_PAIRS  # type: ignore
-except ImportError:
-    pass
+
+def evaluate_retrieval() -> None:
+    from src.ingestion import ingest
+    from src.retrieval import retrieve
+
+    if not EVAL_PAIRS:
+        console.print(
+            "[yellow]EVAL_PAIRS is empty.[/] Add question/pdf_path/relevant_pages "
+            "entries to eval_pairs.py to run the IR eval.\n"
+        )
+        return
+
+    console.print(f"\n[bold]RetrieveAI IR Eval[/] — {len(EVAL_PAIRS)} question(s)\n")
+
+    table = Table(
+        "Q#", "Question", "PDF", "Recall@5", "Recall@10", "MRR",
+        show_lines=True, header_style="bold magenta",
+    )
+
+    recall5_scores: list[float] = []
+    recall10_scores: list[float] = []
+    mrr_scores: list[float] = []
+
+    for i, pair in enumerate(EVAL_PAIRS, 1):
+        question = pair["question"]
+        pdf_path = pair["pdf_path"]
+        relevant_chunk_ids = {str(p) for p in pair["relevant_pages"]}
+
+        with console.status(f"Q{i}: ingesting + retrieving..."):
+            collection, _ = ingest(pdf_path)
+            chunks = retrieve(collection, question, top_k=10)
+
+        retrieved_chunk_ids = [str(c.page) for c in chunks]
+
+        r5 = recall_at_k(retrieved_chunk_ids, relevant_chunk_ids, 5)
+        r10 = recall_at_k(retrieved_chunk_ids, relevant_chunk_ids, 10)
+        mrr = mean_reciprocal_rank(retrieved_chunk_ids, relevant_chunk_ids)
+
+        recall5_scores.append(r5)
+        recall10_scores.append(r10)
+        mrr_scores.append(mrr)
+
+        table.add_row(
+            str(i),
+            question[:50] + ("..." if len(question) > 50 else ""),
+            pdf_path.rsplit("/", 1)[-1],
+            f"{r5:.2f}",
+            f"{r10:.2f}",
+            f"{mrr:.2f}",
+        )
+
+    n = len(EVAL_PAIRS)
+    table.add_row(
+        "", "[bold]Average[/]", "",
+        f"[bold]{sum(recall5_scores) / n:.2f}[/]",
+        f"[bold]{sum(recall10_scores) / n:.2f}[/]",
+        f"[bold]{sum(mrr_scores) / n:.2f}[/]",
+    )
+
+    console.print(table)
+    console.print()
 
 
 def _matches(text: str, keywords: list[str]) -> bool:
@@ -41,12 +109,12 @@ def _mark(ok: bool) -> str:
     return "[green]PASS[/]" if ok else "[red]FAIL[/]"
 
 
-def evaluate(pdf_path: str) -> None:
+def smoke_test(pdf_path: str) -> None:
     from src.ingestion import ingest, load_collection
     from src.retrieval import retrieve
     from src.workflow import run
 
-    console.print(f"\n[bold]RetrieveAI Eval[/] — {pdf_path}\n")
+    console.print(f"\n[bold]RetrieveAI Smoke Test[/] — {pdf_path}\n")
 
     with console.status("Ingesting..."):
         ingest(pdf_path)
@@ -56,7 +124,7 @@ def evaluate(pdf_path: str) -> None:
                   show_lines=True, header_style="bold magenta")
 
     passed = 0
-    for i, qa in enumerate(QA_PAIRS, 1):
+    for i, qa in enumerate(SMOKE_QA_PAIRS, 1):
         question = qa["question"]
         keywords = qa.get("keywords", [])
 
@@ -86,15 +154,28 @@ def evaluate(pdf_path: str) -> None:
 
     console.print()
     console.print(table)
-    summary = "[green]ALL PASS[/]" if passed == len(QA_PAIRS) else "[yellow]SOME FAILED[/]"
-    console.print(f"\n[bold]Result:[/] {passed}/{len(QA_PAIRS)} — {summary}\n")
+    summary = "[green]ALL PASS[/]" if passed == len(SMOKE_QA_PAIRS) else "[yellow]SOME FAILED[/]"
+    console.print(f"\n[bold]Result:[/] {passed}/{len(SMOKE_QA_PAIRS)} — {summary}\n")
 
-    if passed < len(QA_PAIRS):
+    if passed < len(SMOKE_QA_PAIRS):
         sys.exit(1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="RetrieveAI eval harness.")
+    parser.add_argument(
+        "--smoke-test",
+        metavar="PDF",
+        default=None,
+        help="Run the old-style keyword pass/fail smoke test against a single ad-hoc PDF.",
+    )
+    args = parser.parse_args()
+
+    if args.smoke_test:
+        smoke_test(args.smoke_test)
+    else:
+        evaluate_retrieval()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        console.print("[red]Usage:[/] python eval.py path/to/doc.pdf")
-        sys.exit(1)
-    evaluate(sys.argv[1])
+    main()
