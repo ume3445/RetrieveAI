@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Iterator
 
@@ -16,11 +17,26 @@ from . import config
 # punctuation followed by newline(s). Deliberately simple — no nltk/spacy.
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])[ \t]+(?=[A-Z])|(?<=[.!?])\n+")
 
+# A lowercase word broken across a line with a hyphen ("op-\ntimal").
+_HYPHEN_BREAK_RE = re.compile(r"(?<=[a-z])-\n(?=[a-z])")
+
+
+def _clean_text(text: str) -> str:
+    """
+    Undo the two most common pypdf extraction artifacts before chunking:
+    typographic ligatures ("ﬁ", "ﬂ") are expanded by NFKC, and words split
+    across lines with a hyphen are rejoined. Left as-is, "classiﬁcation"
+    tokenizes to ["classi", "cation"] and can never match a query for
+    "classification" in BM25.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    return _HYPHEN_BREAK_RE.sub("", text)
+
 
 def _pdf_pages(path: str) -> Iterator[tuple[int, str]]:
     reader = PdfReader(path)
     for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
+        text = _clean_text(page.extract_text() or "")
         if text.strip():
             yield i + 1, text
 
@@ -46,7 +62,8 @@ def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
     Greedily pack sentences into chunks up to `size` chars, never splitting a
     sentence across chunks. A single sentence longer than `size` (equations,
     tables) falls back to a hard character split. The last 1-2 sentences of
-    each chunk carry over into the next, targeting ~`overlap` chars.
+    each chunk carry over into the next, targeting ~`overlap` chars, but only
+    when they fit: no chunk ever exceeds `size`.
     """
     sentences = _split_sentences(text)
     if not sentences:
@@ -71,6 +88,11 @@ def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
         if current and current_len + added_len > size:
             chunks.append(" ".join(current))
             current, current_len = _carry_over(current, overlap)
+            # Overlap is best-effort, the size limit is not: drop carried
+            # sentences (oldest first) until the incoming sentence fits.
+            while current and current_len + 1 + len(sentence) > size:
+                dropped = current.pop(0)
+                current_len = current_len - len(dropped) - 1 if current else 0
             added_len = len(sentence) + (1 if current else 0)
 
         current.append(sentence)

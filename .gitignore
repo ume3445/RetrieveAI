@@ -5,4 +5,8 @@ __pycache__/
 *.pyc
 *.pdf
 .claude/
-.env
+evaluation/.cache/
+chroma_db_baseline/
+.eval_worktree/
+.DS_Store
+.pytest_cache/
