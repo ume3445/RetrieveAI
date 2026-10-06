@@ -62,7 +62,8 @@ def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
     Greedily pack sentences into chunks up to `size` chars, never splitting a
     sentence across chunks. A single sentence longer than `size` (equations,
     tables) falls back to a hard character split. The last 1-2 sentences of
-    each chunk carry over into the next, targeting ~`overlap` chars.
+    each chunk carry over into the next, targeting ~`overlap` chars, but only
+    when they fit: no chunk ever exceeds `size`.
     """
     sentences = _split_sentences(text)
     if not sentences:
@@ -87,6 +88,11 @@ def _chunk_text(text: str, size: int, overlap: int) -> list[str]:
         if current and current_len + added_len > size:
             chunks.append(" ".join(current))
             current, current_len = _carry_over(current, overlap)
+            # Overlap is best-effort, the size limit is not: drop carried
+            # sentences (oldest first) until the incoming sentence fits.
+            while current and current_len + 1 + len(sentence) > size:
+                dropped = current.pop(0)
+                current_len = current_len - len(dropped) - 1 if current else 0
             added_len = len(sentence) + (1 if current else 0)
 
         current.append(sentence)
