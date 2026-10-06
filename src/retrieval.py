@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 import chromadb
@@ -32,7 +33,9 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
+    # NFKC here too, so queries (and any chunks stored before ingestion-time
+    # cleaning existed) tokenize the same way as cleaned chunks.
+    return re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", text).lower())
 
 
 def _min_max_normalize(scores: list[float]) -> list[float]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Iterator
 
@@ -16,11 +17,26 @@ from . import config
 # punctuation followed by newline(s). Deliberately simple — no nltk/spacy.
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])[ \t]+(?=[A-Z])|(?<=[.!?])\n+")
 
+# A lowercase word broken across a line with a hyphen ("op-\ntimal").
+_HYPHEN_BREAK_RE = re.compile(r"(?<=[a-z])-\n(?=[a-z])")
+
+
+def _clean_text(text: str) -> str:
+    """
+    Undo the two most common pypdf extraction artifacts before chunking:
+    typographic ligatures ("ﬁ", "ﬂ") are expanded by NFKC, and words split
+    across lines with a hyphen are rejoined. Left as-is, "classiﬁcation"
+    tokenizes to ["classi", "cation"] and can never match a query for
+    "classification" in BM25.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    return _HYPHEN_BREAK_RE.sub("", text)
+
 
 def _pdf_pages(path: str) -> Iterator[tuple[int, str]]:
     reader = PdfReader(path)
     for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
+        text = _clean_text(page.extract_text() or "")
         if text.strip():
             yield i + 1, text
 
