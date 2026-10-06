@@ -6,3 +6,7 @@ __pycache__/
 *.pdf
 .claude/
 .env
+evaluation/.cache/
+chroma_db_baseline/
+.eval_worktree/
+.DS_Store
