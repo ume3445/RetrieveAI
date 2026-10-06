@@ -4,7 +4,7 @@ the gold answer span (so the score survives re-chunking).
 
 Version-agnostic: it imports whatever src/ is on the path and only uses names
 that exist in every version (retrieve, hybrid_retrieve, _get_bm25_index,
-_tokenize, workflow._node_retrieve/_node_rerank), so the exact same harness
+_tokenize, workflow._node_retrieve, and _node_rerank if present), so the exact same harness
 scores the baseline commit and the fixed one.
 
 Modes (all called with top_k=5, each query searches only its own paper):
@@ -12,7 +12,7 @@ Modes (all called with top_k=5, each query searches only its own paper):
   bm25     BM25 index alone
   dense    retrieve()        (embedding search + exact cosine rescore)
   hybrid   hybrid_retrieve()
-  app      what the app actually hands the LLM: workflow retrieve + rerank nodes
+  app      what the app actually hands the LLM (the workflow's retrieval nodes)
 
 Usage:
   python -m evaluation.run_eval --label after [--reingest] [--offline]
@@ -188,7 +188,9 @@ def _bm25(retrieval, col, question: str) -> list[str]:
 
 def _app(workflow, col, question: str) -> list[str]:
     state = {"query": question, "collection": col, "top_k": K, "chunks": [], "answer": None}
-    state = workflow._node_rerank(workflow._node_retrieve(state))
+    state = workflow._node_retrieve(state)
+    if hasattr(workflow, "_node_rerank"):  # baseline graph had a score-floor node
+        state = workflow._node_rerank(state)
     return [c.text for c in state["chunks"]]
 
 

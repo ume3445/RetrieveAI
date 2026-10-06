@@ -7,7 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from . import config
 from .generation import Answer, generate
-from .retrieval import Chunk, retrieve
+from .retrieval import Chunk, hybrid_retrieve
 
 
 class RAGState(TypedDict):
@@ -19,19 +19,12 @@ class RAGState(TypedDict):
 
 
 def _node_retrieve(state: RAGState) -> RAGState:
-    chunks = retrieve(state["collection"], state["query"], top_k=state["top_k"])
+    # Hybrid (dense + BM25, RRF-fused) is what the eval measures, so it is
+    # what the app runs. The old "drop anything under half the top score"
+    # rerank node was removed: that floor was designed for cosine scores, and
+    # on RRF scores it would discard exactly the chunks only BM25 found.
+    chunks = hybrid_retrieve(state["collection"], state["query"], top_k=state["top_k"])
     return {**state, "chunks": chunks}
-
-
-def _node_rerank(state: RAGState) -> RAGState:
-    chunks = state["chunks"]
-    if not chunks:
-        return state
-    # Drop chunks that score below half the top result; keeps context tight
-    # without an absolute threshold that varies across queries.
-    floor = chunks[0].score * 0.5
-    filtered = [c for c in chunks if c.score >= floor]
-    return {**state, "chunks": filtered or chunks}
 
 
 def _node_generate(state: RAGState) -> RAGState:
@@ -41,11 +34,9 @@ def _node_generate(state: RAGState) -> RAGState:
 def _build_graph():
     g = StateGraph(RAGState)
     g.add_node("retrieve", _node_retrieve)
-    g.add_node("rerank", _node_rerank)
     g.add_node("generate", _node_generate)
     g.set_entry_point("retrieve")
-    g.add_edge("retrieve", "rerank")
-    g.add_edge("rerank", "generate")
+    g.add_edge("retrieve", "generate")
     g.add_edge("generate", END)
     return g.compile()
 
