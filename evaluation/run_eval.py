@@ -92,14 +92,21 @@ def main() -> None:
     papers = sorted({q["paper"] for q in queries})
     papers_dir = Path(args.papers_dir).resolve()
 
+    if args.reingest:
+        for p in papers:
+            _, added = ingestion.ingest(str(papers_dir / p), force=True)
+            print(f"re-ingested {p}: {added} chunks")
+        # ChromaDB 1.x keeps a stale HNSW reader for a collection that was
+        # deleted and recreated under the same name in the same process
+        # ("Error creating hnsw segment reader: Nothing found on disk"), so
+        # evaluate in a fresh interpreter. Embeddings are cached, so this is free.
+        argv = [a for a in sys.argv[1:] if a != "--reingest"]
+        os.execv(sys.executable, [sys.executable, "-m", "evaluation.run_eval", *argv])
+
     collections, chunk_stats = {}, {}
     for p in papers:
         pdf = str(papers_dir / p)
-        if args.reingest:
-            col, added = ingestion.ingest(pdf, force=True)
-            print(f"re-ingested {p}: {added} chunks")
-        else:
-            col = ingestion.load_collection(pdf)
+        col = ingestion.load_collection(pdf)
         collections[p] = col
         docs = col.get(include=["documents"])["documents"]
         lens = [len(d) for d in docs]
