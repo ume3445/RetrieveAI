@@ -20,5 +20,12 @@ def normalize(text: str) -> str:
     return _WS.sub(" ", text).strip().lower()
 
 
+def _squash(text: str) -> str:
+    # Whitespace is dropped entirely for matching: different pypdf versions
+    # disagree on spacing around math symbols ("size r" vs "sizer"), and that
+    # should not decide whether a chunk "contains the answer".
+    return normalize(text).replace(" ", "")
+
+
 def contains_span(chunk_text: str, gold_span: str) -> bool:
-    return normalize(gold_span) in normalize(chunk_text)
+    return _squash(gold_span) in _squash(chunk_text)
